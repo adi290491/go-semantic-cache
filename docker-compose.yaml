@@ -1,0 +1,37 @@
+services:
+  redis-stack:
+    image: redis/redis-stack:latest
+    ports:
+      # Default Redis port
+      - "6379:6379"
+      # Redis Insight GUI port
+      - "8001:8001"
+    volumes:
+      # Persist data
+      - redis-stack-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli","--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  semantic-cache:
+    build: ./
+    ports:
+      - "8002:8002"
+    depends_on:
+      - redis-stack
+    env_file:
+      - ./.env
+    networks:
+      - backend
+
+
+volumes:
+  redis-stack-data:
+    driver: local
+  
+networks:
+  backend:
