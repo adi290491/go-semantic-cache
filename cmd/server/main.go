@@ -1,15 +1,11 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"os"
 
 	"github.com/adi290491/semantic-cache/config"
-	"github.com/adi290491/semantic-cache/internal/database"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
+	"github.com/adi290491/semantic-cache/internal/handler"
 )
 
 func main() {
@@ -35,26 +31,39 @@ func main() {
 		os.Exit(1)
 	}
 
-	rdb := database.NewRedisClient(cfg)
-	if rdb != nil {
-		slog.Info("Redis client created at port " + cfg.Port)
-	}
-
-	ctx := context.Background()
-
-	client := openai.NewClient(option.WithAPIKey(cfg.OpenaiAPIKey))
+	handler := handler.NewHandler(cfg)
 
 	prompt := "Who is the CEO of Apple?"
+	handler.HandleUserQuery(prompt)
 
-	resp, err := client.Responses.New(ctx, responses.ResponseNewParams{
-		Input: responses.ResponseNewParamsInputUnion{OfString: openai.String(prompt)},
-		Model: openai.ChatModelGPT4_1Mini,
-	})
+	prompt = "Remind me who the CEO of Apple is?"
+	handler.HandleUserQuery(prompt)
 
-	if err != nil {
-		panic(err)
-	}
+	// rdb := database.NewRedisClient(cfg)
+	// if rdb != nil {
+	// 	slog.Info("Redis client created at port " + cfg.Port)
+	// }
 
-	print(resp.OutputText())
+	// ctx := context.Background()
+
+	// client := openai.NewClient(option.WithAPIKey(cfg.OpenaiAPIKey))
+
+	// prompt := "Who is the CEO of Apple?"
+
+	// resp, err := client.Responses.New(ctx, responses.ResponseNewParams{
+	// 	Input: responses.ResponseNewParamsInputUnion{OfString: openai.String(prompt)},
+	// 	Model: openai.ChatModelGPT4_1Mini,
+	// })
+
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// print(resp.OutputText())
+
+	// queryHandler := ai.NewQueryHandler(cfg)
+
+	// prompt := "Who is the CEO of Apple?"
+	// queryHandler.HandleAIQuery(prompt)
 
 }
