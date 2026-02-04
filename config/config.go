@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -17,9 +18,9 @@ type Config struct {
 
 type RedisConfig struct {
 	Hostname string
-	Username string
 	Password string
 	Port     string
+	Db       int
 }
 
 func LoadConfig() (*Config, error) {
@@ -31,19 +32,23 @@ func LoadConfig() (*Config, error) {
 	openaiAPIKey := os.Getenv("OPENAI_API_KEY")
 
 	if err := validateAPIKey(openaiAPIKey); err != nil {
-		slog.Error("OPENAI_API_KEY validation error", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("OPENAI_API_KEY validation error: %v", err)
+	}
+
+	db, err := strconv.Atoi(os.Getenv("REDIS_DB"))
+	if db < 0 || db > 15 {
+		return nil, fmt.Errorf("invalid database number: %v", err)
 	}
 
 	redisCfg := &RedisConfig{
-		Hostname: os.Getenv("DB_HOSTNAME"),
-		Username: os.Getenv("DB_USERNAME"),
-		Password: os.Getenv("DB_PASSWORD"),
-		Port:     os.Getenv("DB_PORT"),
+		Hostname: os.Getenv("REDIS_HOSTNAME"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		Port:     os.Getenv("REDIS_PORT"),
+		Db:       db,
 	}
 
-	if redisCfg.Hostname == "" || redisCfg.Username == "" || redisCfg.Password == "" || redisCfg.Port == "" {
-		return nil, fmt.Errorf("missing required database configuration. Please ensure DB_HOSTNAME, DB_PORT, DB_NAME, DB_USERNAME, and DB_PASSWORD are set")
+	if redisCfg.Hostname == "" || redisCfg.Password == "" || redisCfg.Port == "" {
+		return nil, fmt.Errorf("missing required database configuration. Please ensure REDIS_HOSTNAME, REDIS_PORT, and REDIS_PASSWORD are set")
 	}
 
 	port := os.Getenv("PORT")

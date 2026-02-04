@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 )
 
 func Float32SliceToBytes(floats []float32) []byte {
@@ -19,12 +20,8 @@ func Float32SliceToBytes(floats []float32) []byte {
 	return buf.Bytes()
 }
 
-func CreateQueryHash(key string) string {
-	h := sha256.New()
-	_, err := h.Write([]byte(key))
-	if err != nil {
-		panic(err)
-	}
+func HashQuery(key string) string {
+	hash := sha256.Sum256([]byte(key))
 
-	return string(h.Sum(nil))
+	return hex.EncodeToString(hash[:])
 }

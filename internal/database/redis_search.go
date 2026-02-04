@@ -2,15 +2,23 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/adi290491/semantic-cache/config"
 	"github.com/adi290491/semantic-cache/internal/model"
 	"github.com/adi290491/semantic-cache/internal/util"
 	"github.com/redis/go-redis/v9"
+)
+
+var ErrCacheMiss = errors.New("cache miss")
+
+const (
+	similarityThreshold = 0.2
 )
 
 type RedisClient struct {
@@ -23,17 +31,23 @@ func NewRedisClient(cfg *config.Config) *RedisClient {
 	slog.Info("Connecting to Redis server at port", "PORT", redisCfg.Port)
 	redisCli := redis.NewClient(&redis.Options{
 		Addr:     redisCfg.Hostname + ":" + redisCfg.Port,
-		Username: redisCfg.Username,
 		Password: redisCfg.Password,
-		DB:       0,
+		DB:       redisCfg.Db,
 	})
 
 	pong, err := redisCli.Ping(context.Background()).Result()
-	slog.Info(pong)
-	if err != nil || pong != "PONG" {
-		slog.Error("Failed to connect to redis client")
+
+	if err != nil {
+		slog.Error("Failed to connect to redis client", "error", err)
 		os.Exit(1)
 	}
+
+	if pong != "PONG" {
+		slog.Error("Unexpected Redis ping response", "response", pong)
+		os.Exit(1)
+	}
+
+	slog.Info("Successfully connected to Redis", "PONG", pong)
 
 	redisClient := &RedisClient{
 		rdb: redisCli,
@@ -50,10 +64,12 @@ func NewRedisClient(cfg *config.Config) *RedisClient {
 }
 
 func (c *RedisClient) CreateVectorIndex(ctx context.Context) error {
+	_ = c.rdb.Do(ctx, "FT.DROPINDEX", "cache_idx").Err()
+
 	cmd := c.rdb.Do(
 		ctx,
 		"FT.CREATE", "cache_idx",
-		"ON HASH",
+		"ON", "HASH",
 		"PREFIX", "1", "cache:",
 		"SCHEMA",
 		"embedding", "VECTOR", "HNSW", "6",
@@ -71,6 +87,7 @@ func (c *RedisClient) CacheEmbedding(ctx context.Context, key string, vector []f
 	err := c.rdb.HSet(ctx, key, model.ResponseModel{
 		Response:   response,
 		Embedding:  vectorBytes,
+		Query:      query,
 		Created_at: time.Now(),
 	}).Err()
 
@@ -78,63 +95,128 @@ func (c *RedisClient) CacheEmbedding(ctx context.Context, key string, vector []f
 }
 
 func (c *RedisClient) Exists(ctx context.Context, key string) (*model.ResponseModel, error) {
-	result, err := c.rdb.HMGet(
-		ctx, key,
-		"response", "query",
-	).Result()
+	// result, err := c.rdb.HMGet(
+	// 	ctx, key,
+	// 	"response", "query",
+	// ).Result()
+
+	type response struct {
+		Response string `redis:"response"`
+		Query    string `redis:"query"`
+	}
+
+	var resp response
+	err := c.rdb.HGetAll(
+		ctx,
+		key,
+	).Scan(&resp)
 
 	if err != nil {
-		if err == redis.Nil {
-			return nil, fmt.Errorf("Field %s not found in key %s\n", "response", key)
-		} else {
-			return nil, fmt.Errorf("Could not get hash field: %v", err)
-		}
+		return nil, fmt.Errorf("failed to get hash: %w", err)
 	}
 
-	response, ok := result[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("Response field type assertion error")
-	}
+	slog.Debug("HGetAll result", "response", resp.Response, "query", resp.Query)
 
-	query, ok := result[1].(string)
-	if !ok {
-		return nil, fmt.Errorf("Query field type assertion error")
+	// fmt.Printf("Response is %v", resp)
+	if resp.Response == "" || resp.Query == "" {
+		slog.Debug("Empty Response - Cache miss", "Response", resp)
+		return nil, ErrCacheMiss
 	}
 
 	return &model.ResponseModel{
-		Response: response,
-		Query:    query,
+		Response: resp.Response,
+		Query:    resp.Query,
 	}, nil
 }
 
 func (c *RedisClient) FindSimilar(ctx context.Context, queryVector []float32) (*model.ResponseModel, error) {
 	vectorBytes := util.Float32SliceToBytes(queryVector)
 
-	query := "(*)=>[KNN num_neighbours @embedding $vector AS score]"
+	query := "(*)=>[KNN 5 @embedding $vec AS score]"
 	cmd := c.rdb.Do(
 		ctx,
 		"FT.SEARCH", "cache_idx",
 		query,
 		"PARAMS", "2", "vec", vectorBytes,
-		"DIALECTS", "2",
+		"DIALECT", "2",
 		"RETURN", "2", "response", "score",
+		"LIMIT", "0", "1",
 	)
 
 	result, err := cmd.Result()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vector search failed: %w", err)
 	}
 
-	response, ok := result.(string)
+	fmt.Printf("Full Response: %v\n", result)
+
+	resultMap, ok := result.(map[interface{}]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Response field type assertion error")
+		return nil, fmt.Errorf("unexpected result format: %T", result)
 	}
 
-	fmt.Printf("Response: %v", response)
+	totalResults, ok := resultMap["total_results"].(int64)
+	if !ok {
+		if totalInt, ok := resultMap["total_results"].(int); ok {
+			totalResults = int64(totalInt)
+		} else {
+			return nil, fmt.Errorf("invalid total_results type: %T", resultMap["total_results"])
+		}
+	}
+
+	if totalResults == 0 {
+		return nil, fmt.Errorf("no similar entries found")
+	}
+
+	results, ok := resultMap["results"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid results type: %T", resultMap["results"])
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("empty results array")
+	}
+
+	// First result should be a map with document data
+	firstResult, ok := results[0].(map[interface{}]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid result document type: %T", results[0])
+	}
+
+	fmt.Printf("First Result: %+v\n", firstResult)
+
+	extraAttr, ok := firstResult["extra_attributes"].(map[interface{}]interface{})
+	if !ok {
+		return nil, fmt.Errorf("extra_attrigutes not found or invalid type: %T", firstResult["extra_attributes"])
+	}
+
+	responseText, ok := extraAttr["response"].(string)
+	if !ok {
+		return nil, fmt.Errorf("response type not found or invalid type")
+	}
+
+	scoreStr, ok := extraAttr["score"].(string)
+	if !ok {
+		return nil, fmt.Errorf("score field not found or wrong type")
+	}
+
+	score, err := strconv.ParseFloat(scoreStr, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid score format: %w", err)
+	}
+
+	if score > similarityThreshold {
+		return nil, fmt.Errorf("similarity score too high: %f > %f", score, similarityThreshold)
+	}
+
+	slog.Info("Similar entry found", "score", score)
+	// fmt.Printf("Response length: %d\n", len(result))
 	// query, ok := result[1].(string)
 	// if !ok {
 	// 	return nil, fmt.Errorf("Query field type assertion error")
 	// }
 
-	return nil, nil
+	return &model.ResponseModel{
+		Response: responseText,
+	}, nil
 }

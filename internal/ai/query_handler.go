@@ -4,24 +4,23 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/adi290491/semantic-cache/config"
 	openai "github.com/sashabaranov/go-openai"
 )
 
-type QueryHandler struct {
+type OpenAIHandler struct {
 	client *openai.Client
 }
 
-func NewQueryHandler(cfg *config.Config) *QueryHandler {
+func NewQueryHandler(cfg *config.Config) *OpenAIHandler {
 	client := openai.NewClient(cfg.OpenaiAPIKey)
-	return &QueryHandler{
+	return &OpenAIHandler{
 		client: client,
 	}
 }
 
-func (q *QueryHandler) HandleAIQuery(prompt string) {
+func (h *OpenAIHandler) HandleAIQuery(prompt string) (string, error) {
 
 	slog.Info("Calling OPENAI API")
 	ctx := context.Background()
@@ -34,7 +33,7 @@ func (q *QueryHandler) HandleAIQuery(prompt string) {
 	// 	Input: responses.ResponseNewParamsInputUnion{OfString: openai.String(prompt)},
 	// 	Model: openai.ChatModelGPT4_1Mini,
 	// })
-	resp, err := q.client.CreateChatCompletion(
+	resp, err := h.client.CreateChatCompletion(
 		ctx,
 		openai.ChatCompletionRequest{
 			Model: openai.GPT4Dot1Mini,
@@ -48,53 +47,31 @@ func (q *QueryHandler) HandleAIQuery(prompt string) {
 	)
 
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	fmt.Println(resp.Choices[0].Message.Content)
+	return resp.Choices[0].Message.Content, nil
 }
 
-func (q *QueryHandler) GetQueryEmbedding(ctx context.Context, query string) []float32 {
+func (h *OpenAIHandler) GenerateEmbedding(ctx context.Context, query string) ([]float32, error) {
 
-	queryRes, err := q.client.CreateEmbeddings(ctx,
+	queryRes, err := h.client.CreateEmbeddings(ctx,
 		openai.EmbeddingRequest{
 			Model: openai.SmallEmbedding3,
-			Input: []string{"How many chucks would a woodchuck chuck"},
+			Input: []string{query},
 		},
 	)
 
 	if err != nil {
-		slog.Error("Error creating query embedding", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to create query embedding: %w", err)
 	}
 
-	// targetRes, err := q.client.CreateEmbeddings(
-	// 	ctx,
-	// 	openai.EmbeddingRequest{
-	// 		Model: openai.SmallEmbedding3,
-	// 		Input: []string{"How many chucks would a woodchuck chuck if the woodchuck could chuck wood"},
-	// 	},
-	// )
+	embedding := queryRes.Data[0].Embedding
+	if len(embedding) == 0 {
+		return nil, fmt.Errorf("empty embedding vector returned")
+	}
+	slog.Debug("Generated embedding", "dimenstion", len(embedding))
 
-	// if err != nil {
-	// 	slog.Error("Error creating target embedding:", err)
-	// 	os.Exit(1)
-	// }
-
-	// fmt.Println("Query Response: %v", queryRes.Data[0])
-	// queryEmbedding := queryRes.Data
-	// targetEmbedding := targetRes.Data[0]
-
-	// similarity, err := queryEmbedding.DotProduct(&targetEmbedding)
-	// if err != nil {
-	// 	slog.Error("Error calculating dot product:", "error", err)
-	// }
-
-	// fmt.Printf("Similarity between query and target is %f", similarity)
-	// vectors := make([][]float32, 0)
-	// for _, data := range queryRes.Data {
-	// 	vectors = append(vectors, data.Embedding)
-	// }
-	// return vectors
-	return queryRes.Data[0].Embedding
+	return embedding, nil
 }
