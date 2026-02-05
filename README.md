@@ -165,7 +165,7 @@ Look for log entries indicating cache hits/misses:
 - `"Similar Cache hit"` - Query matched semantically
 - `"Cache miss, calling handler"` - New query, calling OpenAI
 
-### 8. Inspect Cache (Optional)
+### 6. Inspect Cache (Optional)
 
 Access Redis Insight at `http://localhost:8001` to visualize cached data.
 
@@ -183,7 +183,7 @@ HGETALL cache:<key-value>
 FT.INFO cache_idx
 ```
 
-### 9. Run Benchmarks
+### 7. Run Benchmarks
 
 Execute the benchmark script to measure performance:
 ```bash
@@ -192,16 +192,6 @@ chmod +x benchmark_cache.sh
 ```
 
 This runs 20 test queries and provides detailed statistics on latency, cost savings, and cache hit rates.
-
-### 10. Stop Services
-```bash
-docker-compose down
-```
-
-To also remove cached data:
-```bash
-docker-compose down -v
-```
 
 ## API Reference
 
