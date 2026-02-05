@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+type contextKey string
+
+const (
+	QueryKey     contextKey = "query"
+	EmbeddingKey contextKey = "embedding"
+)
+
 type ResponseModel struct {
 	Response   string    `redis:"response"`
 	Query      string    `redis:"query"`

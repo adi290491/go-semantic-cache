@@ -18,7 +18,12 @@ import (
 var ErrCacheMiss = errors.New("cache miss")
 
 const (
+	// SimilarityThreshold defines the maximum cosine distance for cache hits.
+	// Lower values = stricter matching (0.0 = identical, 1.0 = completely different)
+	// 0.2 means "similar enough" - queries with distance < 0.2 are considered matches
 	similarityThreshold = 0.2
+
+	EmbeddingDimension = 1536
 )
 
 type RedisClient struct {
@@ -74,7 +79,7 @@ func (c *RedisClient) CreateVectorIndex(ctx context.Context) error {
 		"SCHEMA",
 		"embedding", "VECTOR", "HNSW", "6",
 		"TYPE", "FLOAT32",
-		"DIM", "1536",
+		"DIM", EmbeddingDimension,
 		"DISTANCE_METRIC", "COSINE",
 	)
 
@@ -91,7 +96,9 @@ func (c *RedisClient) CacheEmbedding(ctx context.Context, key string, vector []f
 		Created_at: time.Now(),
 	}).Err()
 
-	c.rdb.Expire(ctx, key, 24*time.Hour)
+	if err := c.rdb.Expire(ctx, key, 24*time.Hour); err != nil {
+		slog.Warn("Failed to set expiration", "error", err, "key", key)
+	}
 
 	return err
 }
@@ -150,7 +157,7 @@ func (c *RedisClient) FindSimilar(ctx context.Context, queryVector []float32) (*
 		return nil, fmt.Errorf("vector search failed: %w", err)
 	}
 
-	fmt.Printf("Full Response: %v\n", result)
+	slog.Debug("Vector search result", "total_results", result)
 
 	resultMap, ok := result.(map[interface{}]interface{})
 	if !ok {
@@ -185,7 +192,7 @@ func (c *RedisClient) FindSimilar(ctx context.Context, queryVector []float32) (*
 		return nil, fmt.Errorf("invalid result document type: %T", results[0])
 	}
 
-	fmt.Printf("First Result: %+v\n", firstResult)
+	slog.Debug("Processing first result", "result", firstResult)
 
 	extraAttr, ok := firstResult["extra_attributes"].(map[interface{}]interface{})
 	if !ok {
@@ -212,11 +219,6 @@ func (c *RedisClient) FindSimilar(ctx context.Context, queryVector []float32) (*
 	}
 
 	slog.Info("Similar entry found", "score", score)
-	// fmt.Printf("Response length: %d\n", len(result))
-	// query, ok := result[1].(string)
-	// if !ok {
-	// 	return nil, fmt.Errorf("Query field type assertion error")
-	// }
 
 	return &model.ResponseModel{
 		Response: responseText,

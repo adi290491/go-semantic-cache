@@ -47,8 +47,12 @@ func LoadConfig() (*Config, error) {
 		Db:       db,
 	}
 
-	if redisCfg.Hostname == "" || redisCfg.Password == "" || redisCfg.Port == "" {
+	if redisCfg.Hostname == "" || redisCfg.Port == "" {
 		return nil, fmt.Errorf("missing required database configuration. Please ensure REDIS_HOSTNAME, REDIS_PORT, and REDIS_PASSWORD are set")
+	}
+
+	if redisCfg.Password == "" {
+		slog.Warn("Redis password not set - connecting without authentication")
 	}
 
 	port := os.Getenv("PORT")

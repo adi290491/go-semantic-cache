@@ -32,14 +32,24 @@ func (h *Handler) HandleUserQuery(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	queryReq := ctx.Value("query").(string)
+	queryReq, ok := ctx.Value(model.QueryKey).(string)
+	if !ok || queryReq == "" {
+		slog.Error("Query not found in context")
+		httperr.RespondWithError(w, fmt.Errorf("invalid request state"), http.StatusInternalServerError)
+		return
+	}
+
+	err := validateQuery(queryReq)
+	if err != nil {
+		httperr.RespondWithError(w, err, http.StatusBadRequest)
+	}
 
 	queryHash := util.HashQuery(queryReq)
 	cacheKey := fmt.Sprintf("cache:%s", queryHash)
-	fmt.Printf("CacheKey: %s\n", cacheKey)
+	slog.Debug("Generated cache key", "key", cacheKey)
 
-	embedding, ok := ctx.Value("embedding").([]float32)
-	var err error
+	embedding, ok := ctx.Value(model.EmbeddingKey).([]float32)
+
 	if !ok || embedding == nil {
 
 		embedding, err = h.aiQueryHandler.GenerateEmbedding(ctx, queryReq)
@@ -77,4 +87,18 @@ func (h *Handler) HandleUserQuery(w http.ResponseWriter, r *http.Request) {
 		Response: response,
 		Query:    queryReq,
 	}, http.StatusOK)
+}
+
+func validateQuery(queryReq string) error {
+	// Validate query
+	if queryReq == "" {
+
+		return fmt.Errorf("query cannot be empty")
+	}
+
+	if len(queryReq) > 4000 { // OpenAI token limits
+		
+		return fmt.Errorf("query too long (max 4000 characters)")
+	}
+	return nil
 }

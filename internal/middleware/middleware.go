@@ -74,8 +74,8 @@ func NewCachingMiddleware(rdb *database.RedisClient, ai *ai.OpenAIHandler) func(
 
 			slog.Info("Cache miss, calling handler")
 
-			ctx = context.WithValue(ctx, "query", queryReq.Query)
-			ctx = context.WithValue(ctx, "embedding", embedding)
+			ctx = context.WithValue(ctx, model.QueryKey, queryReq.Query)
+			ctx = context.WithValue(ctx, model.EmbeddingKey, embedding)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
