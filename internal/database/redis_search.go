@@ -91,6 +91,8 @@ func (c *RedisClient) CacheEmbedding(ctx context.Context, key string, vector []f
 		Created_at: time.Now(),
 	}).Err()
 
+	c.rdb.Expire(ctx, key, 24*time.Hour)
+
 	return err
 }
 

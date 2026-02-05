@@ -2,27 +2,32 @@ package main
 
 import (
 	"log/slog"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/adi290491/semantic-cache/config"
+	"github.com/adi290491/semantic-cache/internal/ai"
+	"github.com/adi290491/semantic-cache/internal/database"
 	"github.com/adi290491/semantic-cache/internal/handler"
+	"github.com/adi290491/semantic-cache/internal/router"
 )
 
+func init() {
+	setupLogging()
+}
+
+func setupLogging() {
+
+	var logger *slog.Logger
+	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	slog.SetDefault(logger)
+}
+
 func main() {
-	// if err := godotenv.Load(); err != nil {
-	// 	slog.Debug("Error loading .env file")
-	// 	// os.Exit(1)
-	// }
-	// openaiAPIKey := os.Getenv("OPENAI_API_KEY")
-
-	// if openaiAPIKey == "" {
-	// 	slog.Error("OPENAI_API_KEY is not set")
-	// 	os.Exit(1)
-	// }
-
-	// redis.NewClient(&redis.Options{
-	// 	Addr: "localhost:6379",
-	// })
 
 	cfg, err := config.LoadConfig()
 
@@ -31,39 +36,48 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler := handler.NewHandler(cfg)
+	redisClient := database.NewRedisClient(cfg)
+	aiClient := ai.NewQueryHandler(cfg)
+	h := handler.NewHandler(redisClient, aiClient)
 
-	prompt := "Who is the CEO of Apple?"
-	handler.HandleUserQuery(prompt)
+	mux := router.NewRouter(redisClient, aiClient, h)
 
-	prompt = "Remind me who the CEO of Apple is?"
-	handler.HandleUserQuery(prompt)
+	s := &http.Server{
+		Addr:         ":" + cfg.Port,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		Handler:      mux,
+	}
 
-	// rdb := database.NewRedisClient(cfg)
-	// if rdb != nil {
-	// 	slog.Info("Redis client created at port " + cfg.Port)
-	// }
-
-	// ctx := context.Background()
-
-	// client := openai.NewClient(option.WithAPIKey(cfg.OpenaiAPIKey))
-
-	// prompt := "Who is the CEO of Apple?"
-
-	// resp, err := client.Responses.New(ctx, responses.ResponseNewParams{
-	// 	Input: responses.ResponseNewParamsInputUnion{OfString: openai.String(prompt)},
-	// 	Model: openai.ChatModelGPT4_1Mini,
-	// })
-
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// print(resp.OutputText())
-
-	// queryHandler := ai.NewQueryHandler(cfg)
+	// go func() {
+	// 	slog.Error("Server listening", "port", cfg.Port)
+	// 	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	// 		slog.Error("Server failed", "error", err)
+	// 		os.Exit(1)
+	// 	}
+	// }()
+	slog.Info("Server listening", "port", cfg.Port)
+	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("Server failed", "error", err)
+		os.Exit(1)
+	}
 
 	// prompt := "Who is the CEO of Apple?"
-	// queryHandler.HandleAIQuery(prompt)
+	// handler.HandleUserQuery(prompt)
+
+	// time.Sleep(5 * time.Second)
+	// handler.HandleUserQuery(prompt)
+
+	// time.Sleep(5 * time.Second)
+	// prompt = "Do you know who the CEO of Apple is?"
+	// handler.HandleUserQuery(prompt)
+
+	// time.Sleep(5 * time.Second)
+	// prompt = "Do you know who the CEO of Google is?"
+	// handler.HandleUserQuery(prompt)
+
+	// time.Sleep(5 * time.Second)
+	// prompt = "What are the 8 planets of the solar system?"
+	// handler.HandleUserQuery(prompt)
 
 }

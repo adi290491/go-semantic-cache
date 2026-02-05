@@ -2,15 +2,11 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
-	"github.com/adi290491/semantic-cache/config"
 	"github.com/adi290491/semantic-cache/httperr"
 	"github.com/adi290491/semantic-cache/internal/ai"
 	"github.com/adi290491/semantic-cache/internal/database"
@@ -23,13 +19,11 @@ type Handler struct {
 	aiQueryHandler *ai.OpenAIHandler
 }
 
-func NewHandler(cfg *config.Config) *Handler {
+func NewHandler(rdb *database.RedisClient, ai *ai.OpenAIHandler) *Handler {
 
-	rdb := database.NewRedisClient(cfg)
-	queryHandler := ai.NewQueryHandler(cfg)
 	return &Handler{
 		redisCli:       rdb,
-		aiQueryHandler: queryHandler,
+		aiQueryHandler: ai,
 	}
 }
 
@@ -38,76 +32,49 @@ func (h *Handler) HandleUserQuery(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	var queryReq model.QueryRequestModel
-	if err := json.NewDecoder(r.Body).Decode(&queryReq); err != nil {
-		slog.Error("Failed to decode query request", "error", err)
-		httperr.RespondWithError(w, fmt.Errorf("Invalid request body"), http.StatusBadRequest)
-		return
-	}
+	queryReq := ctx.Value("query").(string)
 
-	queryHash := util.HashQuery(queryReq.Query)
+	queryHash := util.HashQuery(queryReq)
 	cacheKey := fmt.Sprintf("cache:%s", queryHash)
 	fmt.Printf("CacheKey: %s\n", cacheKey)
 
-	// Find exact match
-	slog.Info("Finding exact match")
-	responseModel, err := h.redisCli.Exists(ctx, cacheKey)
-	if err == nil {
-		slog.Info("Cache hit", "Key", cacheKey, "Response Model", responseModel)
-		httperr.WriteJSON(w, responseModel, http.StatusOK)
-		return
+	embedding, ok := ctx.Value("embedding").([]float32)
+	var err error
+	if !ok || embedding == nil {
+
+		embedding, err = h.aiQueryHandler.GenerateEmbedding(ctx, queryReq)
+		if err != nil {
+			slog.Warn("Cannot cache without embedding")
+		}
 	}
 
-	if !errors.Is(err, database.ErrCacheMiss) {
-		slog.Error("Redis error while checking cache", "error", err)
-		httperr.RespondWithError(w, fmt.Errorf("error while checking cache: %w", err), http.StatusInternalServerError)
-		return
-	}
-
-	slog.Warn("Cache miss, fetching similar query", "key", cacheKey)
-
-	// Find similar match
-	queryVector, err := h.aiQueryHandler.GenerateEmbedding(ctx, queryReq.Query)
-
-	if err != nil {
-		slog.Error("Embedding error", "error", err)
-		httperr.RespondWithError(w, fmt.Errorf("failed to generate embedding: %w", err), http.StatusInternalServerError)
-		return
-	}
-
-	responseModel, err = h.redisCli.FindSimilar(ctx, queryVector)
-
-	if err == nil && responseModel != nil {
-		slog.Info("Similar Cache hit", "Key", cacheKey, "Response Model", responseModel)
-		httperr.WriteJSON(w, responseModel, http.StatusOK)
-		return
-	}
-
-	if err != nil {
-		slog.Warn("Error while fetching similar query", "error", err)
-		// os.Exit(1)
-	}
-
-	slog.Warn("Cache miss, fetching from API", "key", cacheKey)
-
-	response, err := h.aiQueryHandler.HandleAIQuery(queryReq.Query)
+	response, err := h.aiQueryHandler.HandleAIQuery(queryReq)
 
 	if err != nil {
 		slog.Error("Error while calling OPENAI API", "error", err)
-		os.Exit(1)
+		httperr.RespondWithError(w, fmt.Errorf("failed to generate response: %w", err), http.StatusInternalServerError)
+		return
 	}
 
 	slog.Info("Caching response", "response", response)
 
 	go func() {
+		cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cacheCancel()
+
 		if err := h.redisCli.CacheEmbedding(
-			ctx,
+			cacheCtx,
 			cacheKey,
-			queryVector,
-			queryReq.Query,
+			embedding,
+			queryReq,
 			response); err != nil {
 			slog.Warn("Failed to cache response", "error", err)
 		}
 		slog.Info("Response cached successfully")
 	}()
+
+	httperr.WriteJSON(w, model.ResponseModel{
+		Response: response,
+		Query:    queryReq,
+	}, http.StatusOK)
 }
